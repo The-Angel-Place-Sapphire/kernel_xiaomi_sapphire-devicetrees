@@ -43,6 +43,8 @@ DTC=${DTC:-$(tool dtc)}
 # and drivers that walk children in order (cam_cpas camera-bus-nodes, kgsl
 # pwrlevels, ...) then fail. Build it from platform/system/libufdt:
 #   gcc -O2 -o ufdt_apply_overlay -Iinclude -Isysdeps/include -I<dtc>/libfdt #     tests/src/ufdt_overlay_test_app.c tests/src/util.c ufdt_*.c #     sysdeps/libufdt_sysdeps_posix.c <dtc>/libfdt/fdt*.c
+FDTOVERLAY=${FDTOVERLAY:-$(tool fdtoverlay)}
+FDTGET=${FDTGET:-$(tool fdtget)}
 UFDT_APPLY_OVERLAY=${UFDT_APPLY_OVERLAY:-$(command -v ufdt_apply_overlay || echo ufdt_apply_overlay)}
 FDTOVERLAYMERGE=${FDTOVERLAYMERGE:-$(tool fdtoverlaymerge)}
 FDTPUT=${FDTPUT:-$(tool fdtput)}
@@ -111,6 +113,11 @@ TP_GPU=$O/graphics/khaje-gpu.dtbo
 TP_SDE=$O/display/khaje-sde.dtbo
 TP_BT=$O/bt/khaje-bt.dtbo
 # apply_overlays <base.dtb> <out.dtb> <overlay.dtbo>... (in order)
+# The tree comes from ufdt_apply_overlay (stock child-node order), but ufdt
+# does not carry the overlays' labels into /__symbols__, and the bootloader
+# needs them to apply dtbo.img on top: without them ABL stays in fastboot.
+# __symbols__ holds node paths (order independent), so the entries the
+# overlays add are taken from an fdtoverlay merge of the same inputs.
 apply_overlays() {
 	local base=$1 out=$2; shift 2
 	cp "$base" "$out"
@@ -118,6 +125,14 @@ apply_overlays() {
 		"$UFDT_APPLY_OVERLAY" "$out" "$ov" "$out.tmp" >/dev/null
 		mv "$out.tmp" "$out"
 	done
+	"$FDTOVERLAY" -i "$base" -o "$out.sym" "$@"
+	local have label
+	have=$("$FDTGET" -p "$out" /__symbols__)
+	for label in $("$FDTGET" -p "$out.sym" /__symbols__); do
+		grep -qxF "$label" <<<"$have" ||
+			"$FDTPUT" -t s "$out" /__symbols__ "$label" "$("$FDTGET" -t s "$out.sym" /__symbols__ "$label")"
+	done
+	rm -f "$out.sym"
 }
 apply_overlays "$O/qcom/khaje.dtb"  "$M/khaje.dtb"  "$TP_VIDC" "$TP_CAM" "$TP_WLAN" "$TP_AUD" "$TP_GPU" "$TP_SDE" "$TP_BT"
 apply_overlays "$O/qcom/khajeg.dtb" "$M/khajeg.dtb" "$TP_VIDC" "$TP_WLAN" "$TP_AUD" "$TP_GPU" "$TP_SDE" "$TP_BT"
