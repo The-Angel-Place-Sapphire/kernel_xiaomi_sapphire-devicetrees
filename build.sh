@@ -24,7 +24,7 @@
 # the same 6 + 47 entries as stock.
 #
 # Usage: ./build.sh [OUT=dir] ; env overrides: KERNEL_DIR, CAMERA_KERNEL_DIR,
-#        DTC, FDTOVERLAY, FDTOVERLAYMERGE, FDTPUT, MKDTBOIMG
+#        DTC, UFDT_APPLY_OVERLAY, FDTOVERLAYMERGE, FDTPUT, MKDTBOIMG
 #
 # Tools: gcc (cpp), python3, dtc/fdtoverlay/fdtoverlaymerge/fdtput from the
 # Qualcomm dtc fork (CLO kernel_platform/external/dtc, branch
@@ -38,7 +38,12 @@ CAMERA_KERNEL_DIR=${CAMERA_KERNEL_DIR:-$TOP/../vendor/qcom/opensource/camera-ker
 QDTC=${QDTC:-}   # dir with the CLO dtc fork tools (dtc, fdtoverlay, fdtoverlaymerge, fdtput)
 tool() { if [ -n "$QDTC" ] && [ -x "$QDTC/$1" ]; then echo "$QDTC/$1"; else command -v "$1" || echo "$1"; fi; }
 DTC=${DTC:-$(tool dtc)}
-FDTOVERLAY=${FDTOVERLAY:-$(tool fdtoverlay)}
+# Base DTBs are merged with AOSP libufdt's ufdt_apply_overlay, like the stock
+# build: dtc's fdtoverlay inserts the subnodes an overlay adds in REVERSE order,
+# and drivers that walk children in order (cam_cpas camera-bus-nodes, kgsl
+# pwrlevels, ...) then fail. Build it from platform/system/libufdt:
+#   gcc -O2 -o ufdt_apply_overlay -Iinclude -Isysdeps/include -I<dtc>/libfdt #     tests/src/ufdt_overlay_test_app.c tests/src/util.c ufdt_*.c #     sysdeps/libufdt_sysdeps_posix.c <dtc>/libfdt/fdt*.c
+UFDT_APPLY_OVERLAY=${UFDT_APPLY_OVERLAY:-$(command -v ufdt_apply_overlay || echo ufdt_apply_overlay)}
 FDTOVERLAYMERGE=${FDTOVERLAYMERGE:-$(tool fdtoverlaymerge)}
 FDTPUT=${FDTPUT:-$(tool fdtput)}
 MKDTBOIMG=${MKDTBOIMG:-$(command -v mkdtboimg.py || echo mkdtboimg.py)}
@@ -105,10 +110,19 @@ TP_AUD=$O/audio/khaje-audio.dtbo
 TP_GPU=$O/graphics/khaje-gpu.dtbo
 TP_SDE=$O/display/khaje-sde.dtbo
 TP_BT=$O/bt/khaje-bt.dtbo
-"$FDTOVERLAY" -i "$O/qcom/khaje.dtb"  -o "$M/khaje.dtb"  "$TP_VIDC" "$TP_CAM" "$TP_WLAN" "$TP_AUD" "$TP_GPU" "$TP_SDE" "$TP_BT"
-"$FDTOVERLAY" -i "$O/qcom/khajeg.dtb" -o "$M/khajeg.dtb" "$TP_VIDC" "$TP_WLAN" "$TP_AUD" "$TP_GPU" "$TP_SDE" "$TP_BT"
-"$FDTOVERLAY" -i "$O/qcom/khajep.dtb" -o "$M/khajep.dtb" "$TP_VIDC" "$TP_GPU"
-"$FDTOVERLAY" -i "$O/qcom/khajeq.dtb" -o "$M/khajeq.dtb" "$TP_GPU"
+# apply_overlays <base.dtb> <out.dtb> <overlay.dtbo>... (in order)
+apply_overlays() {
+	local base=$1 out=$2; shift 2
+	cp "$base" "$out"
+	for ov in "$@"; do
+		"$UFDT_APPLY_OVERLAY" "$out" "$ov" "$out.tmp" >/dev/null
+		mv "$out.tmp" "$out"
+	done
+}
+apply_overlays "$O/qcom/khaje.dtb"  "$M/khaje.dtb"  "$TP_VIDC" "$TP_CAM" "$TP_WLAN" "$TP_AUD" "$TP_GPU" "$TP_SDE" "$TP_BT"
+apply_overlays "$O/qcom/khajeg.dtb" "$M/khajeg.dtb" "$TP_VIDC" "$TP_WLAN" "$TP_AUD" "$TP_GPU" "$TP_SDE" "$TP_BT"
+apply_overlays "$O/qcom/khajep.dtb" "$M/khajep.dtb" "$TP_VIDC" "$TP_GPU"
+apply_overlays "$O/qcom/khajeq.dtb" "$M/khajeq.dtb" "$TP_GPU"
 # merge_dtbs.py emits khaje (msm-id 518 + 586) once per msm-id
 for id in 518 586; do
 	cp "$M/khaje.dtb" "$M/khaje-$id.dtb"
