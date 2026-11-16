@@ -24,7 +24,8 @@
 # the same 6 + 47 entries as stock.
 #
 # Usage: ./build.sh [OUT=dir] ; env overrides: KERNEL_DIR, CAMERA_KERNEL_DIR,
-#        DTC, UFDT_APPLY_OVERLAY, FDTOVERLAYMERGE, FDTPUT, MKDTBOIMG
+#        DTC, UFDT_APPLY_OVERLAY, FDTOVERLAY, FDTOVERLAYMERGE, FDTGET, FDTPUT,
+#        MKDTBOIMG, CPP
 #
 # Tools: gcc (cpp), python3, dtc/fdtoverlay/fdtoverlaymerge/fdtput from the
 # Qualcomm dtc fork (CLO kernel_platform/external/dtc, branch
@@ -42,13 +43,17 @@ DTC=${DTC:-$(tool dtc)}
 # build: dtc's fdtoverlay inserts the subnodes an overlay adds in REVERSE order,
 # and drivers that walk children in order (cam_cpas camera-bus-nodes, kgsl
 # pwrlevels, ...) then fail. Build it from platform/system/libufdt:
-#   gcc -O2 -o ufdt_apply_overlay -Iinclude -Isysdeps/include -I<dtc>/libfdt #     tests/src/ufdt_overlay_test_app.c tests/src/util.c ufdt_*.c #     sysdeps/libufdt_sysdeps_posix.c <dtc>/libfdt/fdt*.c
+#   gcc -O2 -o ufdt_apply_overlay -Iinclude -Isysdeps/include -I<dtc>/libfdt \
+#     tests/src/ufdt_overlay_test_app.c tests/src/util.c ufdt_*.c \
+#     sysdeps/libufdt_sysdeps_posix.c <dtc>/libfdt/fdt*.c
+# (in an Android tree it is built as $(HOST_OUT_EXECUTABLES)/ufdt_apply_overlay)
 FDTOVERLAY=${FDTOVERLAY:-$(tool fdtoverlay)}
 FDTGET=${FDTGET:-$(tool fdtget)}
 UFDT_APPLY_OVERLAY=${UFDT_APPLY_OVERLAY:-$(command -v ufdt_apply_overlay || echo ufdt_apply_overlay)}
 FDTOVERLAYMERGE=${FDTOVERLAYMERGE:-$(tool fdtoverlaymerge)}
 FDTPUT=${FDTPUT:-$(tool fdtput)}
 MKDTBOIMG=${MKDTBOIMG:-$(command -v mkdtboimg.py || echo mkdtboimg.py)}
+CPP=${CPP:-gcc -E}   # C preprocessor; the Android build uses clang -E
 OUT=${OUT:-$TOP/out}
 
 DTC_INCLUDE="$KERNEL_DIR/scripts/dtc/include-prefixes"
@@ -70,13 +75,16 @@ compile() {
 	out=$O/${1%.dts}.$ext
 	dir=$(dirname "$src")
 	mkdir -p "$(dirname "$out")"
-	gcc -E -nostdinc -I"$DTC_INCLUDE" -I"$dir" -I"$TOP/qcom" \
+	$CPP -nostdinc -I"$DTC_INCLUDE" -I"$dir" -I"$TOP/qcom" \
 		-I"$CAMERA_KERNEL_DIR" -undef -D__DTS__ -x assembler-with-cpp \
 		-o "$out.pre" "$src"
 	# shellcheck disable=SC2086
 	"$DTC" -q -O dtb -o "$out" -b 0 -i "$dir" -i "$DTC_INCLUDE" $DTC_FLAGS "$out.pre"
 	rm -f "$out.pre"
 }
+
+# mkdtboimg.py (python script) or the AOSP host executable
+mkdtboimg() { case "$MKDTBOIMG" in *.py) python3 "$MKDTBOIMG" "$@";; *) "$MKDTBOIMG" "$@";; esac; }
 
 # ------------------------------------------------------------------ compile
 SOURCES="qcom/khaje.dts
@@ -179,5 +187,5 @@ done < <(grep -v '^#' "$TOP/reference/ENTRIES")
 # shellcheck disable=SC2086
 cat $DTB_LIST > "$OUT/dtb.img"
 # shellcheck disable=SC2086
-python3 "$MKDTBOIMG" create "$OUT/dtbo.img" --page_size=4096 $DTBO_LIST
+mkdtboimg create "$OUT/dtbo.img" --page_size=4096 $DTBO_LIST
 echo "build.sh: $OUT/dtb.img ($(echo $DTB_LIST | wc -w) DTBs), $OUT/dtbo.img ($(echo $DTBO_LIST | wc -w) entries)"
